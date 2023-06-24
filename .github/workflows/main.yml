@@ -21,7 +21,7 @@ jobs:
       - name: Build and deploy Container 
         run: |
           # 手动添加 containerapp 扩展
-          az extension add --name containerapp -upgrade
+          az extension add --name containerapp --upgrade
        
           # 使用 Azure CLI 来部署更新
           az containerapp up -n ${{ secrets.CONTAINER_APP_NAME }} \
