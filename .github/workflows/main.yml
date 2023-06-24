@@ -1,0 +1,61 @@
+name: Deploy to Azure
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+jobs:
+  build-deploy:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out the codebase
+        uses: actions/checkout@v3
+
+      - name: Log in to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+     
+      - name: Build and deploy Container 
+        run: |
+          # 手动添加 containerapp 扩展
+          az extension add --name containerapp -upgrade
+       
+          # 使用 Azure CLI 来部署更新
+          az containerapp up -n ${{ secrets.CONTAINER_APP_NAME }} \
+            -g ${{ secrets.RESOURCE_GROUP }} \
+            --source ${{ github.workspace }}/ingress \
+            --registry-server ${{ secrets.ACR_NAME }}.azurecr.io
+  test-deployment:
+    needs: build-deploy
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Log in to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get new container name
+        run: |
+          # 为 Azure CLI 安装 containerapp 扩展
+          az extension add --name containerapp --upgrade
+          # 获取最新部署修订版本的名称
+          REVISION_NAME=`az containerapp revision list -n ${{ secrets.CONTAINER_APP_NAME }} -g ${{ secrets.RESOURCE_GROUP }} --query "[].name" -o tsv | tail -1`
+          # 获取最新部署修订版本的 fqdn
+          REVISION_FQDN=`az containerapp revision show -n ${{ secrets.CONTAINER_APP_NAME }} -g ${{ secrets.RESOURCE_GROUP }} --revision "$REVISION_NAME" --query properties.fqdn -o tsv`
+          # 将值存储在 env vars 中
+          echo "REVISION_NAME=$REVISION_NAME" >> $GITHUB_ENV
+          echo "REVISION_FQDN=$REVISION_FQDN" >> $GITHUB_ENV
+
+      - name: Test deployment
+        id: test-deployment
+        uses: jtalk/url-health-check-action@v3 # Marketplace action 触达端点
+        with:
+          url: "https://${{ env.REVISION_FQDN }}/health" # 预发布端点
+
+      - name: Deploy succeeded
+        run: |
+          echo "Deployment succeeded! Enabling new revision"
+          az containerapp ingress traffic set -n ${{ secrets.CONTAINER_APP_NAME }} -g ${{ secrets.RESOURCE_GROUP }} --revision-weight "${{ env.REVISION_NAME }}=100"
